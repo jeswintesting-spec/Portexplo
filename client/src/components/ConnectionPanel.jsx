@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { Share2, Monitor, Cpu, HardDrive, ShieldAlert, Check, Copy } from 'lucide-react';
+import { Share2, Monitor, Cpu, HardDrive, ShieldAlert, Check, Copy, Globe, RefreshCw } from 'lucide-react';
 
-export default function ConnectionPanel({ config, showToast, passcode }) {
+export default function ConnectionPanel({ config, showToast, passcode, onRefreshConfig }) {
   const canvasRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [sysInfo, setSysInfo] = useState(null);
+  const [tunnelLoading, setTunnelLoading] = useState(false);
 
   // Derive target URLs
   const ipAddress = config?.ips && config.ips.length > 0 ? config.ips[0] : 'localhost';
@@ -63,6 +64,31 @@ export default function ConnectionPanel({ config, showToast, passcode }) {
     return () => clearInterval(interval);
   }, [passcode]);
 
+  const toggleGlobalAccess = async () => {
+    if (tunnelLoading) return;
+    setTunnelLoading(true);
+    
+    try {
+      const endpoint = globalUrl ? '/api/admin/tunnel/stop' : '/api/admin/tunnel/start';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: passcode ? { 'Authorization': `Bearer ${passcode}` } : {}
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        showToast('Success', globalUrl ? 'Global Access Disabled' : 'Global Access Enabled');
+        if (onRefreshConfig) onRefreshConfig();
+      } else {
+        showToast('Error', data.error || 'Failed to toggle Global Access');
+      }
+    } catch (err) {
+      showToast('Error', 'Connection error');
+    } finally {
+      setTunnelLoading(false);
+    }
+  };
+
   const handleCopyLink = () => {
     if (!shareableUrlWithToken) return;
     navigator.clipboard.writeText(shareableUrlWithToken);
@@ -101,6 +127,30 @@ export default function ConnectionPanel({ config, showToast, passcode }) {
           {copied ? <Check size={16} /> : <Copy size={16} />}
           {copied ? 'Copied Access Link' : 'Copy Access Link'}
         </button>
+
+        <div style={{ marginTop: '16px', marginBottom: '8px' }}>
+          <button 
+            className="btn" 
+            onClick={toggleGlobalAccess} 
+            disabled={tunnelLoading}
+            style={{ 
+              width: '100%', 
+              background: globalUrl ? 'rgba(239, 68, 68, 0.15)' : 'rgba(0, 242, 254, 0.15)',
+              border: `1px solid ${globalUrl ? 'rgba(239, 68, 68, 0.4)' : 'rgba(0, 242, 254, 0.4)'}`,
+              color: globalUrl ? '#ef4444' : '#00f2fe',
+              fontWeight: 600,
+              padding: '10px'
+            }}
+          >
+            {tunnelLoading ? (
+              <><RefreshCw size={16} className="spin" /> Updating...</>
+            ) : globalUrl ? (
+              <><ShieldAlert size={16} /> Disable Global Access</>
+            ) : (
+              <><Globe size={16} /> Enable Global Access</>
+            )}
+          </button>
+        </div>
 
         <div className="connection-details">
           {globalUrl && (

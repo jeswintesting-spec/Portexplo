@@ -25,6 +25,7 @@ export default function App() {
   // Passcode Security States
   const [passcode, setPasscode] = useState(localStorage.getItem('portexplo_passcode') || '');
   const [passcodeRequired, setPasscodeRequired] = useState(false);
+  const [authStatus, setAuthStatus] = useState('checking'); // 'checking', 'approved', 'pending', 'revoked', 'unauthorized'
   const [isDirSelectorOpen, setIsDirSelectorOpen] = useState(false);
   const [role, setRole] = useState(null);
   const [showWelcome, setShowWelcome] = useState(!localStorage.getItem('portexplo_welcome_dismissed'));
@@ -134,28 +135,90 @@ export default function App() {
     setRole(null);
   };
 
-  // Periodically check session status — detect host revocation for REMOTE devices only
-  // Host machine (localhost) is always auto-authorized, no need to poll
+  // Initial auth status check
   useEffect(() => {
-    if (!passcodeRequired || !passcode || config?.isHostMachine) return;
+    if (!config) return;
+    if (config.isHostMachine) {
+      setAuthStatus('approved');
+      return;
+    }
+    const checkAccess = async () => {
+      try {
+        const res = await fetch('/api/auth/status', {
+          headers: getAuthHeaders()
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setAuthStatus('approved');
+        } else if (res.status === 401) {
+          if (data.status === 'pending') setAuthStatus('pending');
+          else if (data.status === 'revoked') {
+            setAuthStatus('revoked');
+            handleLogout();
+          } else {
+            setAuthStatus('unauthorized');
+          }
+        }
+      } catch (err) {
+        setAuthStatus('unauthorized');
+      }
+    };
+    checkAccess();
+  }, [config, passcode]);
+
+  // Automatically request access if unauthorized and no passcode required
+  useEffect(() => {
+    if (config && !config.isHostMachine && authStatus === 'unauthorized' && !passcodeRequired) {
+      fetch('/api/auth', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ code: '' }) 
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'pending') setAuthStatus('pending');
+        else if (data.status === 'approved') setAuthStatus('approved');
+      })
+      .catch(() => {});
+    }
+  }, [config, authStatus, passcodeRequired]);
+
+  // Periodically check session status for pending or approved remote devices
+  useEffect(() => {
+    if (config?.isHostMachine) return;
+    if (authStatus !== 'pending' && authStatus !== 'approved') return;
 
     const checkSessionStatus = async () => {
       try {
         const res = await fetch('/api/auth/status', {
           headers: getAuthHeaders()
         });
-        if (res.status === 401) {
-          showToast('Error', 'Session has been revoked by the host.');
-          handleLogout();
+        const data = await res.json();
+        
+        if (res.ok && authStatus === 'pending') {
+          setAuthStatus('approved');
+          showToast('Success', 'Host approved your connection!');
+        } else if (res.status === 401) {
+          if (data.status === 'revoked') {
+            setAuthStatus('revoked');
+            showToast('Error', 'Session has been revoked by the host.');
+            handleLogout();
+          } else if (data.status === 'pending' && authStatus === 'approved') {
+            setAuthStatus('pending');
+            showToast('Error', 'Your session was disconnected. Waiting for host approval again.');
+            setRole(null);
+          } else if (data.status === 'unauthorized') {
+            setAuthStatus('unauthorized');
+          }
         }
       } catch (err) {
         console.error('Session check failed:', err);
       }
     };
 
-    const interval = setInterval(checkSessionStatus, 3000);
+    const interval = setInterval(checkSessionStatus, 2000);
     return () => clearInterval(interval);
-  }, [passcodeRequired, passcode, config?.isHostMachine]);
+  }, [authStatus, config]);
 
   // Navigate folder
   const handleNavigate = (path) => {
@@ -248,15 +311,32 @@ export default function App() {
     });
   };
 
-  const handlePasscodeSuccess = (validCode) => {
+  const handlePasscodeSuccess = (validCode, status) => {
     setPasscode(validCode);
     localStorage.setItem('portexplo_passcode', validCode);
-    showToast('Success', 'Access Granted!');
+    if (status === 'approved') {
+      showToast('Success', 'Access Granted!');
+    }
     fetchConfig(); // Reload config
   };
 
-  // Intercept layout if passcode is required and not provided
-  if (passcodeRequired && !passcode) {
+  // Waiting Room state
+  if (authStatus === 'pending') {
+    return (
+      <div className="app-container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
+        <div className="glass-panel" style={{ maxWidth: '420px', width: '100%', padding: '40px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <Activity size={48} className="color-cyan spin" style={{ marginBottom: '24px' }} />
+          <h2 style={{ fontSize: '24px', fontWeight: 700, margin: '0 0 12px 0', color: 'var(--text-main)' }}>Waiting for Approval</h2>
+          <p style={{ fontSize: '15px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+            Your device is attempting to connect to the server. Please ask the host to accept your request in the Host Console.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Intercept layout if unauthorized and a passcode is required
+  if (authStatus === 'unauthorized' && passcodeRequired && !passcode) {
     return <PasscodeScreen onSuccess={handlePasscodeSuccess} />;
   }
 
@@ -373,10 +453,10 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Host Console Card */}
+              {/* Host Console Card / Host Your Own */}
               <div 
                 className="welcome-role-card" 
-                onClick={() => setRole('host')}
+                onClick={() => setRole(config?.isHostMachine ? 'host' : 'host-info')}
                 style={{
                   background: 'rgba(15, 25, 45, 0.4)',
                   backdropFilter: 'blur(12px)',
@@ -392,7 +472,7 @@ export default function App() {
                   gap: '16px',
                   textAlign: 'left',
                   alignItems: 'stretch',
-                  opacity: config?.isHostMachine ? 1 : 0.8 // Slightly dim for non-hosts, though they can still click it
+                  opacity: config?.isHostMachine ? 1 : 0.8
                 }}
                 onMouseEnter={e => {
                   e.currentTarget.style.transform = 'translateY(-4px)';
@@ -419,14 +499,18 @@ export default function App() {
                 </div>
                 
                 <div>
-                  <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-main)', margin: '0 0 8px 0' }}>Host Console</h2>
+                  <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-main)', margin: '0 0 8px 0' }}>
+                    {config?.isHostMachine ? 'Host Console' : 'Host Your Own'}
+                  </h2>
                   <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
-                    Manage server settings, view active network connections, monitor device sessions, and access sharing QR codes. Control who has access to your local files.
+                    {config?.isHostMachine 
+                      ? 'Manage server settings, view active network connections, monitor device sessions, and access sharing QR codes. Control who has access to your local files.' 
+                      : 'Want to share your own files? Learn how to run Portexplo on your computer to create your own secure local file server.'}
                   </p>
                 </div>
                 
                 <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 600, color: 'var(--text-main)' }}>
-                  Open Console <ChevronRight size={16} />
+                  {config?.isHostMachine ? 'Open Console' : 'Learn More'} <ChevronRight size={16} />
                 </div>
               </div>
 
@@ -556,12 +640,22 @@ export default function App() {
                 >
                   <Folder size={12} /> Explore Files
                 </button>
-                <button 
-                  className={`header-nav-tab ${role === 'host' ? 'active' : ''}`}
-                  onClick={() => setRole('host')}
-                >
-                  <HardDrive size={12} /> Host Console
-                </button>
+                {config.isHostMachine && (
+                  <button 
+                    className={`header-nav-tab ${role === 'host' ? 'active' : ''}`}
+                    onClick={() => setRole('host')}
+                  >
+                    <HardDrive size={12} /> Host Console
+                  </button>
+                )}
+                {!config.isHostMachine && (
+                  <button 
+                    className={`header-nav-tab ${role === 'host-info' ? 'active' : ''}`}
+                    onClick={() => setRole('host-info')}
+                  >
+                    <HardDrive size={12} /> Host Your Own
+                  </button>
+                )}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -632,7 +726,7 @@ export default function App() {
               uploadQueue={uploadQueue}
             />
           </div>
-        ) : (
+        ) : role === 'host' ? (
           /* Host Console View: Full-width, 3-Column Administration Dashboard Grid */
           <div style={{
             display: 'grid',
@@ -643,7 +737,7 @@ export default function App() {
           }}>
             {/* Column 1: Connection & Host Diagnostics */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              <ConnectionPanel config={config} showToast={showToast} passcode={passcode} />
+              <ConnectionPanel config={config} showToast={showToast} passcode={passcode} onRefreshConfig={fetchConfig} />
             </div>
 
             {/* Column 2: Host Settings & Disk breakdown */}
@@ -707,7 +801,35 @@ export default function App() {
               <ActivityLogs passcode={passcode} />
             </div>
           </div>
-        )}
+        ) : role === 'host-info' ? (
+          <div className="glass-panel" style={{ maxWidth: '600px', margin: '40px auto', padding: '40px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{ width: '80px', height: '80px', borderRadius: '24px', background: 'rgba(0,242,254,0.1)', color: '#00f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '24px' }}>
+              <HardDrive size={40} />
+            </div>
+            <h2 style={{ fontSize: '28px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '16px' }}>Host Your Own Server</h2>
+            <p style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: '32px' }}>
+              Portexplo is a powerful local-first application. To securely share files from your own computer, you can run the Portexplo server locally. 
+            </p>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '24px', borderRadius: '16px', textAlign: 'left', width: '100%', marginBottom: '32px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <h4 style={{ margin: '0 0 16px 0', color: 'var(--text-main)', fontSize: '16px' }}>Quick Start Guide</h4>
+              <ol style={{ margin: 0, paddingLeft: '24px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '15px' }}>
+                <li>Get the Portexplo files on your computer.</li>
+                <li>Make sure you have <strong>Node.js</strong> installed.</li>
+                <li>Run <code style={{ background: 'rgba(0,242,254,0.1)', color: '#00f2fe', padding: '2px 8px', borderRadius: '6px', fontSize: '13px' }}>npm install</code> in the project folder to install dependencies.</li>
+                <li>Launch your server using the appropriate script: 
+                  <ul style={{ marginTop: '8px', paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <li><code style={{ color: 'var(--text-main)', fontSize: '13px' }}>start-windows.bat</code> for Windows</li>
+                    <li><code style={{ color: 'var(--text-main)', fontSize: '13px' }}>start-mac.command</code> for macOS</li>
+                    <li><code style={{ color: 'var(--text-main)', fontSize: '13px' }}>start-linux.sh</code> for Linux</li>
+                  </ul>
+                </li>
+              </ol>
+            </div>
+            <button className="btn btn-primary" onClick={() => setRole('explorer')} style={{ padding: '12px 32px', fontSize: '16px', borderRadius: '12px' }}>
+              Back to Explorer
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* Main Workspace Footer */}

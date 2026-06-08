@@ -17,6 +17,7 @@ let readOnly = true;
 let passcode = null;
 let enableTunnel = false;
 let tunnelUrl = null;
+let currentTunnel = null;
 
 for (let i = 2; i < process.argv.length; i++) {
   const arg = process.argv[i];
@@ -66,15 +67,9 @@ app.use(express.static(path.join(__dirname, 'client', 'dist')));
 // --- Session & Device Tracking ---
 const activeSessions = new Map(); // key: ip + '|' + userAgent
 const revokedSessions = new Set(); // set of ip + '|' + userAgent
+const pendingSessions = new Map(); // key: ip + '|' + userAgent
 
-// Add a mock mobile device connection for testing layout and revocation
-activeSessions.set('192.168.1.100|Mozilla/5.0 (Linux; Android 10; Mobile)', {
-  key: '192.168.1.100|Mozilla/5.0 (Linux; Android 10; Mobile)',
-  ip: '192.168.1.100',
-  userAgent: 'Mozilla/5.0 (Linux; Android 10; Mobile)',
-  deviceType: 'Mobile',
-  lastActive: new Date().toISOString()
-});
+
 
 const activityLogs = [];
 function addLog(action, details, req = null) {
@@ -95,7 +90,7 @@ function addLog(action, details, req = null) {
   }
 }
 
-function trackSession(req) {
+function trackSession(req, isPending = false) {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
   const userAgent = req.headers['user-agent'] || 'Unknown User Agent';
   const sessionKey = ip + '|' + userAgent;
@@ -108,13 +103,20 @@ function trackSession(req) {
     deviceType = 'Tablet';
   }
 
-  activeSessions.set(sessionKey, {
+  const sessionData = {
     key: sessionKey,
     ip,
     userAgent,
     deviceType,
     lastActive: new Date()
-  });
+  };
+
+  if (isPending) {
+    pendingSessions.set(sessionKey, sessionData);
+  } else {
+    activeSessions.set(sessionKey, sessionData);
+    pendingSessions.delete(sessionKey);
+  }
 }
 
 // --- Authentication Middleware ---
@@ -129,38 +131,47 @@ function authenticate(req, res, next) {
   const sessionKey = ip + '|' + userAgent;
 
   if (revokedSessions.has(sessionKey)) {
-    return res.status(401).json({ error: 'Session has been revoked by the host.' });
+    return res.status(401).json({ error: 'Session has been revoked by the host.', status: 'revoked' });
   }
 
   // Host machine (localhost) is always auto-authorized — no passcode needed
   if (isLocalhostRequest(req)) {
-    trackSession(req);
+    trackSession(req, false);
     return next();
   }
 
+  let validPasscode = false;
   if (!passcode) {
-    trackSession(req);
-    return next(); // No passcode security configured — open access
-  }
-
-  // 1. Check HTTP Authorization Header
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    if (token === passcode) {
-      trackSession(req);
-      return next();
+    validPasscode = true;
+  } else {
+    const authHeader = req.headers.authorization;
+    const queryToken = req.query.token;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      validPasscode = (authHeader.substring(7) === passcode);
+    } else if (queryToken === passcode) {
+      validPasscode = true;
     }
   }
 
-  // 2. Check URL Query Parameter
-  const queryToken = req.query.token;
-  if (queryToken === passcode) {
-    trackSession(req);
+  if (!validPasscode) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid passcode' });
+  }
+
+  if (activeSessions.has(sessionKey)) {
+    trackSession(req, false);
     return next();
   }
 
-  res.status(401).json({ error: 'Unauthorized: Invalid passcode' });
+  trackSession(req, true);
+  return res.status(401).json({ error: 'Waiting for host approval.', status: 'pending' });
+}
+
+function authorizeHostOnly(req, res, next) {
+  if (!isLocalhostRequest(req)) {
+    return res.status(403).json({ error: 'Forbidden: Admin actions can only be performed from the host machine.' });
+  }
+  trackSession(req);
+  next();
 }
 
 // --- Helper Functions ---
@@ -330,23 +341,26 @@ app.get('/api/host-recovery', (req, res) => {
 
 app.post('/api/auth', (req, res) => {
   const { code } = req.body;
-  if (!passcode) {
-    return res.json({ success: true, message: 'No passcode required' });
-  }
-  if (code === passcode) {
-    // Clear revoked state on successful passcode entry
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
-    const userAgent = req.headers['user-agent'] || 'Unknown User Agent';
-    const sessionKey = ip + '|' + userAgent;
-    revokedSessions.delete(sessionKey);
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+  const userAgent = req.headers['user-agent'] || 'Unknown User Agent';
+  const sessionKey = ip + '|' + userAgent;
 
-    trackSession(req);
-    addLog('Auth', 'Logged in successfully', req);
-    res.json({ success: true });
-  } else {
+  if (passcode && code !== passcode) {
     addLog('Auth', 'Failed passcode attempt', req);
-    res.status(401).json({ success: false, error: 'Invalid passcode' });
+    return res.status(401).json({ success: false, error: 'Invalid passcode' });
   }
+
+  if (revokedSessions.has(sessionKey)) {
+    revokedSessions.delete(sessionKey);
+  }
+
+  if (activeSessions.has(sessionKey)) {
+    return res.json({ success: true, status: 'approved' });
+  }
+
+  trackSession(req, true);
+  addLog('Auth', 'Device requested access (pending)', req);
+  res.json({ success: true, status: 'pending' });
 });
 
 // File List API (Protected)
@@ -430,9 +444,41 @@ app.get('/api/download', authenticate, (req, res) => {
       res.download(targetPath);
     } else {
       const mimeType = mime.lookup(targetPath) || 'application/octet-stream';
-      addLog('Download', `Streamed/Viewed file "${path.basename(targetPath)}"`, req);
-      res.setHeader('Content-Type', mimeType);
-      res.sendFile(targetPath);
+      
+      // Explicit HTTP Range Request support for Media Streaming
+      if (req.headers.range) {
+        const parts = req.headers.range.replace(/bytes=/, "").split("-");
+        const partialstart = parts[0];
+        const partialend = parts[1];
+
+        const start = parseInt(partialstart, 10);
+        const end = partialend ? parseInt(partialend, 10) : stat.size - 1;
+        const chunksize = (end - start) + 1;
+
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': mimeType
+        });
+        
+        const fileStream = fs.createReadStream(targetPath, { start, end });
+        fileStream.pipe(res);
+        
+        // Only log on initial stream request to prevent log spam
+        if (start === 0) {
+          addLog('Streaming', `Started streaming "${path.basename(targetPath)}"`, req);
+        }
+      } else {
+        res.writeHead(200, {
+          'Content-Length': stat.size,
+          'Content-Type': mimeType,
+          'Accept-Ranges': 'bytes'
+        });
+        const fileStream = fs.createReadStream(targetPath);
+        fileStream.pipe(res);
+        addLog('Download', `Viewed file "${path.basename(targetPath)}"`, req);
+      }
     }
   } catch (error) {
     if (!res.headersSent) {
@@ -531,7 +577,7 @@ app.get('/api/sysinfo', authenticate, (req, res) => {
 });
 
 // GET Quick locations list on host PC (Protected)
-app.get('/api/admin/locations', authenticate, (req, res) => {
+app.get('/api/admin/locations', authorizeHostOnly, (req, res) => {
   try {
     const locations = [];
     const homeDir = os.homedir();
@@ -596,7 +642,7 @@ app.get('/api/admin/locations', authenticate, (req, res) => {
 });
 
 // POST Set dynamic shared directory root (Protected)
-app.post('/api/admin/set-root', authenticate, (req, res) => {
+app.post('/api/admin/set-root', authorizeHostOnly, (req, res) => {
   try {
     const { newPath } = req.body;
     if (!newPath) {
@@ -628,7 +674,7 @@ app.post('/api/admin/set-root', authenticate, (req, res) => {
 });
 
 // POST Update admin settings (Protected)
-app.post('/api/admin/settings', authenticate, (req, res) => {
+app.post('/api/admin/settings', authorizeHostOnly, (req, res) => {
   try {
     const { newPasscode, newReadOnly } = req.body;
     
@@ -734,13 +780,19 @@ app.post('/api/extract-zip', authenticate, (req, res) => {
 });
 
 // GET active sessions (Protected)
-app.get('/api/admin/sessions', authenticate, (req, res) => {
+app.get('/api/admin/sessions', authorizeHostOnly, (req, res) => {
   try {
     const now = Date.now();
-    // Auto clean up sessions idle for over 2 hours
+    // Auto clean up active sessions idle for over 2 hours
     for (const [key, session] of activeSessions.entries()) {
       if (now - new Date(session.lastActive).getTime() > 2 * 60 * 60 * 1000) {
         activeSessions.delete(key);
+      }
+    }
+    // Auto clean up pending sessions idle for over 2 hours
+    for (const [key, session] of pendingSessions.entries()) {
+      if (now - new Date(session.lastActive).getTime() > 2 * 60 * 60 * 1000) {
+        pendingSessions.delete(key);
       }
     }
 
@@ -752,15 +804,20 @@ app.get('/api/admin/sessions', authenticate, (req, res) => {
       ...session,
       isCurrent: session.key === currentKey
     }));
+    
+    const pendingList = Array.from(pendingSessions.values()).map(session => ({
+      ...session,
+      isCurrent: false
+    }));
 
-    res.json({ sessions: sessionsList });
+    res.json({ sessions: sessionsList, pending: pendingList });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // POST revoke session (Protected)
-app.post('/api/admin/sessions/revoke', authenticate, (req, res) => {
+app.post('/api/admin/sessions/revoke', authorizeHostOnly, (req, res) => {
   try {
     const { key } = req.body;
     if (!key) {
@@ -769,6 +826,7 @@ app.post('/api/admin/sessions/revoke', authenticate, (req, res) => {
 
     revokedSessions.add(key);
     activeSessions.delete(key);
+    pendingSessions.delete(key);
 
     const targetIp = key.split('|')[0];
     addLog('Revoke', `Revoked access for device: ${targetIp}`, req);
@@ -779,13 +837,52 @@ app.post('/api/admin/sessions/revoke', authenticate, (req, res) => {
   }
 });
 
-// Lightweight endpoint to check authentication and revocation status (Protected)
-app.get('/api/auth/status', authenticate, (req, res) => {
-  res.json({ authenticated: true });
+// POST approve session (Protected)
+app.post('/api/admin/sessions/approve', authorizeHostOnly, (req, res) => {
+  try {
+    const { key } = req.body;
+    if (!key) {
+      return res.status(400).json({ error: 'Session key is required' });
+    }
+
+    if (pendingSessions.has(key)) {
+      const sessionData = pendingSessions.get(key);
+      sessionData.lastActive = new Date();
+      activeSessions.set(key, sessionData);
+      pendingSessions.delete(key);
+      revokedSessions.delete(key);
+
+      const targetIp = key.split('|')[0];
+      addLog('Approve', `Approved access for device: ${targetIp}`, req);
+      res.json({ success: true, message: 'Session approved' });
+    } else {
+      res.status(404).json({ error: 'Pending session not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Lightweight endpoint to check authentication and revocation status
+app.get('/api/auth/status', (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+  const userAgent = req.headers['user-agent'] || 'Unknown User Agent';
+  const sessionKey = ip + '|' + userAgent;
+
+  if (revokedSessions.has(sessionKey)) {
+    return res.status(401).json({ status: 'revoked' });
+  }
+  if (activeSessions.has(sessionKey) || isLocalhostRequest(req)) {
+    return res.json({ status: 'approved' });
+  }
+  if (pendingSessions.has(sessionKey)) {
+    return res.status(401).json({ status: 'pending' });
+  }
+  res.status(401).json({ status: 'unauthorized' });
 });
 
 // GET active logs (Protected)
-app.get('/api/admin/logs', authenticate, (req, res) => {
+app.get('/api/admin/logs', authorizeHostOnly, (req, res) => {
   res.json({ logs: activityLogs });
 });
 
@@ -863,7 +960,7 @@ function getFolderBreakdown(dirPath) {
 }
 
 // GET storage diagnostics (Protected)
-app.get('/api/admin/storage', authenticate, (req, res) => {
+app.get('/api/admin/storage', authorizeHostOnly, (req, res) => {
   try {
     const disk = getDiskSpace(sharedDir);
     const breakdown = getFolderBreakdown(sharedDir);
@@ -871,6 +968,38 @@ app.get('/api/admin/storage', authenticate, (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// POST start global tunnel (Protected)
+app.post('/api/admin/tunnel/start', authorizeHostOnly, async (req, res) => {
+  if (currentTunnel) {
+    return res.json({ success: true, globalUrl: tunnelUrl });
+  }
+  try {
+    currentTunnel = await localtunnel({ port: cliPort, local_host: '127.0.0.1' });
+    tunnelUrl = currentTunnel.url;
+    
+    currentTunnel.on('close', () => {
+      tunnelUrl = null;
+      currentTunnel = null;
+    });
+    
+    addLog('System', 'Global tunnel enabled', req);
+    res.json({ success: true, globalUrl: tunnelUrl });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to initialize localtunnel: ' + err.message });
+  }
+});
+
+// POST stop global tunnel (Protected)
+app.post('/api/admin/tunnel/stop', authorizeHostOnly, (req, res) => {
+  if (currentTunnel) {
+    currentTunnel.close();
+    currentTunnel = null;
+    tunnelUrl = null;
+    addLog('System', 'Global tunnel disabled', req);
+  }
+  res.json({ success: true });
 });
 
 // Fallback to React Frontend
@@ -892,17 +1021,18 @@ app.listen(cliPort, '0.0.0.0', async () => {
   if (enableTunnel) {
     console.log('Starting global tunnel via localtunnel...');
     try {
-      const tunnel = await localtunnel({ port: cliPort, local_host: '127.0.0.1' });
-      tunnelUrl = tunnel.url;
+      currentTunnel = await localtunnel({ port: cliPort, local_host: '127.0.0.1' });
+      tunnelUrl = currentTunnel.url;
       console.log('=========================================');
       console.log(`GLOBAL ACCESS ONLINE!`);
       console.log(`- Public URL:  ${tunnelUrl}`);
       console.log(`- Passcode Required: ${passcode}`);
       console.log('=========================================\n');
 
-      tunnel.on('close', () => {
+      currentTunnel.on('close', () => {
         console.warn('Global tunnel was closed.');
         tunnelUrl = null;
+        currentTunnel = null;
       });
     } catch (err) {
       console.error('Failed to initialize localtunnel:', err.message);

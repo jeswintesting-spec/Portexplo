@@ -3,6 +3,7 @@ import { Laptop, Smartphone, Tablet, ShieldX, RefreshCw, WifiOff, ShieldCheck } 
 
 export default function DeviceManager({ passcode, showToast }) {
   const [sessions, setSessions] = useState([]);
+  const [pendingSessionsList, setPendingSessionsList] = useState([]);
   const [loading, setLoading] = useState(false);
 
   // Track which keys are in "disconnected" state (key -> timestamp)
@@ -21,6 +22,7 @@ export default function DeviceManager({ passcode, showToast }) {
       if (!res.ok) throw new Error('Failed to fetch active sessions');
       const data = await res.json();
       setSessions(data.sessions || []);
+      setPendingSessionsList(data.pending || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -95,6 +97,28 @@ export default function DeviceManager({ passcode, showToast }) {
     }
   };
 
+  const handleApprove = async (key) => {
+    try {
+      const res = await fetch('/api/admin/sessions/approve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(passcode ? { 'Authorization': `Bearer ${passcode}` } : {})
+        },
+        body: JSON.stringify({ key })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('Success', 'Device connection approved.');
+        fetchSessions();
+      } else {
+        showToast('Error', data.error || 'Failed to approve session');
+      }
+    } catch (err) {
+      showToast('Error', 'Connection error approving session');
+    }
+  };
+
   const getDeviceIcon = (deviceType, isDisconnected) => {
     const color = isDisconnected ? 'rgba(239,68,68,0.7)' : undefined;
     const props = { size: 20, style: color ? { color } : {}, className: color ? undefined : 'color-cyan' };
@@ -146,6 +170,61 @@ export default function DeviceManager({ passcode, showToast }) {
           <RefreshCw size={13} className={loading ? 'spin' : ''} />
         </button>
       </div>
+
+      {pendingSessionsList.length > 0 && (
+        <div style={{ marginBottom: '24px' }}>
+          <h4 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--warning)', margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Pending Requests ({pendingSessionsList.length})
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {pendingSessionsList.map((session) => (
+              <div
+                key={session.key}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 12px',
+                  background: 'rgba(234, 179, 8, 0.05)',
+                  border: '1px solid rgba(234, 179, 8, 0.3)',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: '12px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '36px', height: '36px', borderRadius: '50%',
+                    background: 'rgba(234, 179, 8, 0.1)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#eab308', flexShrink: 0
+                  }}>
+                    {getDeviceIcon(session.deviceType, false)}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, color: '#eab308' }}>{session.ip}</div>
+                    <div style={{ color: 'var(--text-muted)', marginTop: '2px', fontSize: '11px' }}>
+                      {parseUserAgent(session.userAgent)}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => handleApprove(session.key)}
+                    style={{ padding: '6px 12px', background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.4)', borderRadius: '6px', color: '#22c55e', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => handleRevoke(session.key)}
+                    style={{ padding: '6px 12px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '6px', color: '#ef4444', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Deny
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {displaySessions.length === 0 ? (

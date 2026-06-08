@@ -32,7 +32,7 @@ export default function PasscodeScreen({ onSuccess }) {
       setVerifying(false);
 
       if (res.ok && data.success) {
-        onSuccess(code.trim());
+        onSuccess(code.trim(), data.status);
       } else {
         triggerShake(data.error || 'Invalid passcode');
       }
