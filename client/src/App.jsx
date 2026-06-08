@@ -382,7 +382,7 @@ export default function App() {
           </div>
         </header>
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', position: 'relative', overflowY: 'auto' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', padding: '80px 20px 40px', position: 'relative', overflowY: 'auto' }}>
           
           {/* Decorative background elements */}
           <div style={{ position: 'absolute', top: '20%', left: '20%', width: '300px', height: '300px', background: 'radial-gradient(circle, rgba(0,242,254,0.08) 0%, rgba(0,0,0,0) 70%)', filter: 'blur(40px)', zIndex: 0, pointerEvents: 'none' }} />
@@ -394,7 +394,7 @@ export default function App() {
                 <Activity size={14} style={{ color: '#00f2fe' }} />
                 Connected to {config?.hostname || 'Local Server'}
               </div>
-              <h1 style={{ fontSize: '42px', fontWeight: 800, margin: '0 0 16px 0', letterSpacing: '-1px', color: 'var(--text-main)' }}>
+              <h1 style={{ fontSize: '48px', fontWeight: 800, background: 'var(--accent-gradient)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: '16px', letterSpacing: '-1.5px', lineHeight: 1.2, padding: '10px 0' }}>
                 Select Your <span style={{ color: '#00f2fe' }}>Workspace</span>
               </h1>
               <p style={{ fontSize: '16px', color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto', lineHeight: 1.6 }}>
@@ -615,6 +615,11 @@ export default function App() {
 
             </div>
           </div>
+        )}
+
+        {/* User Manual Modal overlay */}
+        {showManual && (
+          <UserManual onClose={() => setShowManual(false)} />
         )}
       </div>
     );

@@ -165,7 +165,7 @@ export default function UserManual({ onClose }) {
                     <div>
                       <strong style={{ color: 'white', display: 'block', marginBottom: '6px' }}>Connection & Global Access</strong>
                       <span style={{ color: 'var(--text-muted)', fontSize: '13px', lineHeight: 1.5 }}>
-                        View local IP addresses and QR codes for quick sharing. You can also click the <strong>Enable Global Access</strong> button to instantly generate a public `loca.lt` URL, allowing people from around the world to access your server!
+                        View local IP addresses and QR codes for quick sharing. You can also click the <strong>Enable Global Access</strong> button to instantly generate a public 'loca.lt' URL, allowing people from around the world to access your server!
                       </span>
                     </div>
                   </div>
