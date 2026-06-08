@@ -29,23 +29,23 @@ Portexplo is built for speed, security, and a premium user experience without th
 - **On-Server Extraction** — Unzip uploaded archives directly on the host machine.
 
 ### 🎥 Native Media Streaming
+- **True Media Streaming** — Advanced HTTP Range Request support for instant scrubbing through large 4K video and audio files without buffering into RAM.
 - **Audio Visualizer** — Built-in premium music player with live frequency bars and vinyl animations.
 - **PDF Presenter Mode** — Read and present PDF documents directly in the browser.
-- **Video & Image Previews** — Stream MP4s and view high-res images natively without downloading.
 - **Code Highlighting** — Native text and code viewer for quick file inspections.
 
 ### 🛡️ Absolute Security Control
-- **Passcode Protection** — Lock your server behind a secure PIN.
-- **Host Auto-Authorization** — The machine hosting the server bypasses the lock screen automatically.
-- **Real-Time Revocation** — View active devices and instantly kick unauthorized users from the network.
+- **Host Approval (Waiting Room)** — Remote devices are held in a secure waiting area until the host explicitly clicks "Accept" to grant access.
+- **Passcode Protection** — Lock your server behind a secure PIN for a secondary layer of authentication.
+- **Host Auto-Authorization** — The machine hosting the server bypasses all security automatically.
+- **Real-Time Revocation** — View active and pending devices in the Host Console to instantly kick unauthorized users.
 - **Read-Only by Default** — Remote modifications are strictly opt-in.
-- **Local-First Architecture** — Zero cloud routing. Your files never leave your network (unless explicitly tunneled).
 
 ### 🌐 Administration & Access
 - **Host Console** — A dedicated admin dashboard for monitoring connections and server health.
+- **Dynamic Global Access** — Click a button in the UI to instantly generate a public `loca.lt` URL, exposing your server to the world without router configuration or server reboots.
 - **Storage Insights** — Scan directories to see visual breakdowns of file types taking up space.
 - **QR Code Pairing** — Scan the generated QR code to auto-authenticate mobile devices instantly.
-- **Global Tunneling** — Use `--tunnel` to securely expose your local server to the internet via LocalTunnel.
 
 ---
 
@@ -183,8 +183,11 @@ Portexplo offers a robust internal REST API.
 - `POST /api/extract-zip` - Native archive extraction
 
 ### Host Administration (Admin Only)
-- `GET /api/admin/sessions` - List all connected remote devices
+- `GET /api/admin/sessions` - List all active and pending remote devices
+- `POST /api/admin/sessions/approve` - Approve a pending device from the waiting room
 - `POST /api/admin/sessions/revoke` - Instantly terminate a specific device session
+- `POST /api/admin/tunnel/start` - Dynamically initialize a public global tunnel
+- `POST /api/admin/tunnel/stop` - Safely shut down the active public global tunnel
 - `POST /api/admin/set-root` - Change the root sharing directory on the fly
 - `GET /api/admin/storage` - Generate a recursive storage consumption report
 

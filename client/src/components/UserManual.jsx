@@ -142,7 +142,8 @@ export default function UserManual({ onClose }) {
 
                 <h4 style={{ color: '#00f2fe', marginBottom: '12px' }}>Features</h4>
                 <ul style={{ color: 'var(--text-muted)', lineHeight: 1.7, paddingLeft: '20px', marginBottom: '24px' }}>
-                  <li><strong>Native Media Previews:</strong> Click on images, PDFs, videos, or audio files to view them directly in your browser without downloading.</li>
+                  <li><strong>True Media Streaming:</strong> Video and audio files use HTTP Range Requests to start playing instantly. You can scrub forward without buffering the entire file!</li>
+                  <li><strong>Native Previews:</strong> Click on images, PDFs, or code files to view them directly in your browser without downloading.</li>
                   <li><strong>Audio Visualizer:</strong> Music files open with a beautiful, reactive waveform visualizer.</li>
                   <li><strong>Deep Search:</strong> Press <kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px', fontSize: '11px' }}>Ctrl+K</kbd> to search for files. The search recursively looks inside folders up to 8 levels deep.</li>
                   <li><strong>Batch Downloads:</strong> Select multiple files and click the "Download ZIP" button to grab them all at once.</li>
@@ -162,9 +163,9 @@ export default function UserManual({ onClose }) {
                   <div style={{ display: 'flex', gap: '16px', background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
                     <MonitorSmartphone size={24} style={{ color: '#00f2fe', flexShrink: 0 }} />
                     <div>
-                      <strong style={{ color: 'white', display: 'block', marginBottom: '6px' }}>Connection & QR Sharing</strong>
+                      <strong style={{ color: 'white', display: 'block', marginBottom: '6px' }}>Connection & Global Access</strong>
                       <span style={{ color: 'var(--text-muted)', fontSize: '13px', lineHeight: 1.5 }}>
-                        The console displays the local network IP addresses (e.g., 192.168.1.5) you can type into mobile devices. It also generates a QR code. Simply scan the QR code with your phone's camera to instantly connect — no typing required!
+                        View local IP addresses and QR codes for quick sharing. You can also click the <strong>Enable Global Access</strong> button to instantly generate a public `loca.lt` URL, allowing people from around the world to access your server!
                       </span>
                     </div>
                   </div>
@@ -194,9 +195,14 @@ export default function UserManual({ onClose }) {
                   If a passcode is set, the host machine (where the server is actually running) is automatically authorized to bypass the lock screen. Any other device (phones, other laptops) will hit the lock screen and must enter the PIN.
                 </p>
 
+                <h4 style={{ color: '#22c55e', marginBottom: '12px' }}>Host Approval (Waiting Room)</h4>
+                <p style={{ color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: '20px' }}>
+                  Even if a remote user has your passcode or global URL, they cannot access your files immediately. They are placed in a <strong>Waiting Room</strong>. The Host must explicitly click <strong>Accept</strong> in the Host Console to let them in.
+                </p>
+
                 <h4 style={{ color: '#ef4444', marginBottom: '12px' }}>Revoking Devices</h4>
                 <p style={{ color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: '20px' }}>
-                  From the Host Console, you can view a list of all actively connected devices (including their browser, OS, and IP). Click <strong>Disconnect</strong> next to a device to instantly revoke their session. They will be immediately kicked back to the lock screen on their device.
+                  From the Host Console, you can view a list of all actively connected devices. Click <strong>Deny</strong> (for pending users) or <strong>Disconnect</strong> (for active users) to instantly kick them from the server.
                 </p>
                 
                 <h4 style={{ color: '#eab308', marginBottom: '12px' }}>Read-Only Mode</h4>
